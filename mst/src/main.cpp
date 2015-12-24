@@ -1,5 +1,5 @@
 #include <iostream>
-
+#include <cstring>
 
 typedef uint32_t index_t;
 typedef uint32_t weight_t;
@@ -47,6 +47,7 @@ public:
         {
         }
 
+    // add a new ListNode with the edge in the sorted linked list
     void add(ListNode * node)
         {
             if (head == nullptr)
@@ -78,13 +79,23 @@ public:
                 node = node->next;
         }
 
-    Vertex * root()
+    // find the root vetrix
+    // without path compression
+    Vertex * croot() const
         {
-            Vertex * root = this;
+            Vertex * root = parent;
             while (root->parent != root)
             {
                 root = root->parent;
             }
+            return root;
+        }
+
+    // find the root vertix
+    // and compress path in the tree if posiible
+    Vertex * root()
+        {
+            Vertex * root = croot();
             if (parent != root)
             {
                 parent = root;
@@ -122,22 +133,37 @@ void printComponents(const Vertex * pV, const index_t & NV)
     }
 }
 
-void merge(Vertex * pV, const index_t & NV)
+inline void move_head(ListNode ** src, ListNode ** dst)
 {
-    Vertex * root1 = pV[0].root(); // first component
+    // assume, that dst is initialized
+    ListNode *tmp = *src;
+    *src = (*src)->next;
+    (*dst)->next = tmp;
+    *dst = (*dst)->next;
+}
+
+inline void step(ListNode ** head)
+{
+    *head = (*head)->next;
+}
+
+// merge two components
+void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
+{
+    // save link to the minimal edge
     ListNode * min_edge = root1->head;
-    Vertex * end_vertex = pV + min_edge->end();
-    Vertex * root2 = end_vertex->root(); // another component
+
+    // merging of the edge list
     ListNode * head1 = root1->head;
     ListNode * head2 = root2->head;
 
-    // delete first nodes, that come from component1 to component2
+    // delete first edges (component1, component2)
     if (head1 != nullptr)
     {
         Vertex * r = pV[head1->end()].root();
         while (r == root2)
         {
-            head1 = head1->next;
+            step(&head1);
             if (head1 == nullptr) break;
             r = pV[head1->end()].root();
         }
@@ -148,25 +174,15 @@ void merge(Vertex * pV, const index_t & NV)
         Vertex * r = pV[head2->end()].root();
         while (r == root1)
         {
-            head2 = head2->next;
+            step(&head2);
             if (head2 == nullptr) break;
             r = pV[head2->end()].root();
         }
     }
 
+    ListNode *head = nullptr;
     // now head1 and head2 do not terminate on this two components
     // initialize the head of the resulting list
-    ListNode *head;
-    if (head1 == nullptr && head2 == nullptr)
-    {
-        root1->head = nullptr;
-        // set min edge
-        end_vertex->head = min_edge;  
-        min_edge->next = nullptr;
-        // set v1 parent of v2
-        root2->parent = root1;
-        return;
-    }
     if (head1 == nullptr)
     {
         head = head2;
@@ -175,16 +191,18 @@ void merge(Vertex * pV, const index_t & NV)
     {
         head = head1;
     }
+    // head1 and head2 contain elements
     else if (head1->edge->w < head2->edge->w)
     {
         head = head1;
-        head1 = head1->next;
+        step(&head1);
     }
     else
     {
         head = head2;
-        head2 = head->next;
+        step(&head2);
     }
+
 
     // merge two lists while both of them contain elements
     // do not forget deletion
@@ -196,14 +214,11 @@ void merge(Vertex * pV, const index_t & NV)
             Vertex * r = pV[head1->end()].root();
             if (r != root2)
             {
-                tmp = head1;
-                head1 = head1->next;
-                node->next = tmp;
-                node = node->next;
+                move_head(&head1, &node);
             }
             else
             {
-                head1 = head1->next;
+                step(&head1);
             }
         }
         else  // head2 is smaller
@@ -211,14 +226,11 @@ void merge(Vertex * pV, const index_t & NV)
             Vertex * r = pV[head2->end()].root();
             if (r != root1)
             {
-                tmp = head2;
-                head2 = head2->next;
-                node->next = tmp;
-                node = node->next;
+                move_head(&head2, &node);
             }
             else
             {
-                head2 = head2->next;
+                step(&head2);
             }
         }
     }
@@ -229,14 +241,11 @@ void merge(Vertex * pV, const index_t & NV)
         Vertex * r = pV[head1->end()].root();
         if (r != root2)
         {
-            tmp = head1;
-            head1 = head1->next;
-            node->next = tmp;
-            node = node->next;
+            move_head(&head1, &node);
         }
         else
         {
-            head1 = head1->next;
+            step(&head1);
         }
     }
     while (head2 != nullptr)
@@ -244,14 +253,11 @@ void merge(Vertex * pV, const index_t & NV)
         Vertex * r = pV[head2->end()].root();
         if (r != root1)
         {
-            tmp = head2;
-            head2 = head2->next;
-            node->next = tmp;
-            node = node->next;
+            move_head(&head2, &node);
         }
         else
         {
-            head2 = head2->next;
+            step(&head2);
         }
     }
     if (node != nullptr)
@@ -262,7 +268,7 @@ void merge(Vertex * pV, const index_t & NV)
     // set merged list of edges
     root1->head = head;
     // set min edge
-    end_vertex->head = min_edge;  
+    root2->head = min_edge;  
     min_edge->next = nullptr;
     // set v1 parent of v2
     root2->parent = root1;
@@ -295,12 +301,17 @@ void MST(
         pV[pE[i].e].add(&pN[j+1]);
     }
     
-    Vertex *v1, *v2;
-    for (index_t i = 0; i < NV-1; ++i)
+    for (index_t i = 0; i < NV; ++i)
     {
         std::cout << "Iteration number " << i << std::endl;
         printComponents(pV, NV);
-        merge(pV, NV);
+        Vertex * root1 = pV[i].root(); // first component
+        if (root1->head != nullptr)
+        {
+            Vertex * end_vertex = pV + root1->head->end();
+            Vertex * root2 = end_vertex->root();
+            merge(pV, NV, root1, root2);
+        }
     }
 
     index_t i = 0, j = 0;
@@ -326,6 +337,7 @@ int main(int argc, char *argv[])
 
     Edge *pEdges = new Edge[NE];
     const Edge **pMinSpanTree = new const Edge*[NV-1];
+    memset(pMinSpanTree, 0, sizeof(Edge*)*(NV-1));
 
     uint32_t v1, v2;
     weight_t w;
@@ -346,7 +358,10 @@ int main(int argc, char *argv[])
     std::cout << "MST:" << std::endl;
     for (uint32_t i = 0; i < NV-1; ++i)
     {
-        std::cout << pMinSpanTree[i]->s << ' ' << pMinSpanTree[i]->e << ' ' << pMinSpanTree[i]->w << std::endl;
+        if (pMinSpanTree[i] != nullptr)
+        {
+            std::cout << pMinSpanTree[i]->s << ' ' << pMinSpanTree[i]->e << ' ' << pMinSpanTree[i]->w << std::endl;
+        }
     }
 
     delete [] pEdges;
