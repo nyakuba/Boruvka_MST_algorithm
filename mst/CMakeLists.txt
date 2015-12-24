@@ -10,6 +10,8 @@ include_directories("${PROJECT_SOURCE_DIR}/include")
 
 add_executable(mst
   ${SRC_DIR}/main.cpp
+  ${SRC_DIR}/mst.cpp
+  ${SRC_DIR}/vertex.cpp
   )
 
 set_property(TARGET mst PROPERTY CXX_STANDARD 11)
