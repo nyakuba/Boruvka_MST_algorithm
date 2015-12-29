@@ -4,7 +4,7 @@
 #include <tbb/parallel_for.h>
 #include "mst.h"
 
-//#define DEBUG
+// #define DEBUG
 
 #if defined(DEBUG)
 tbb::mutex io_mutex;
@@ -192,26 +192,56 @@ public:
         }
     void operator()(const tbb::blocked_range<index_t> & r) const
         {
-            PRINT("Started interval" << r.begin() << " to " << r.end());
+            PRINT("Started interval from " << r.begin() << " to " << r.end());
             printComponents(pV, NV);
-            pEMutex->lock();
-            index_t start = r.begin();
-            Vertex * root1 = pV[start].croot();
-            if (root1->head != nullptr)
+            bool completed = false;
+            while (!completed)
             {
-                Vertex * end_vertex = pV + root1->head->end();
-                Vertex * root2 = end_vertex->croot();
-                pVMutex[root1 - pV].lock();
-                pVMutex[root2 - pV].lock();
+                completed = true;  // assume mst was built
+                bool merge_flag = false;  // are we prepared for merge?
+                Vertex *v1, *v2, *root1, *root2;
+                index_t rindex1, rindex2;
+                pEMutex->lock();
+                // find and lock two component's roots for merge
+                for (index_t vertex_index = 0; vertex_index < NV; ++vertex_index)
+                {
+                    v1 = pV + vertex_index;
+                    root1 = v1->croot();
+                    rindex1 = root1 - pV;
+                    // try lock. if successfull, return true
+                    if (!pVMutex[rindex1].try_lock())
+                    {
+                        completed = false;
+                    }
+                    else if (root1->head != nullptr)
+                    {
+                        completed = false;
+                        v2 = pV + root1->head->end();
+                        root2 = v2->croot();
+                        rindex2 = root2 - pV;
+                        if (!pVMutex[rindex2].try_lock())
+                        {
+                            pVMutex[rindex1].unlock();
+                        }
+                        else
+                        {
+                            merge_flag = true;
+                            break;
+                        }  // if r2 is locked
+                    }
+                    else
+                    {
+                        pVMutex[rindex1].unlock();
+                    }
+                }  // for each vertex in pV
                 pEMutex->unlock();
-                merge(pV, NV, root1, root2);
-                pVMutex[root1 - pV].unlock();
-                pVMutex[root2 - pV].unlock();
-            }
-            else
-            {
-                pEMutex->unlock();
-            }
+                if (merge_flag)
+                {
+                    merge(pV, NV, root1, root2);
+                    pVMutex[rindex1].unlock();
+                    pVMutex[rindex2].unlock();
+                }
+            }  // while !completed
         } 
 private:
     static index_t NV;
@@ -268,7 +298,7 @@ void MST(
     // we merge NV components
     // for (index_t i = 0; i < NV; ++i)
     // {
-    tbb::parallel_for(tbb::blocked_range<index_t>(0, NV, 1), fun);
+    tbb::parallel_for(tbb::blocked_range<index_t>(0, NT, 1), fun);
     // }
 
     index_t i = 0, j = 0;

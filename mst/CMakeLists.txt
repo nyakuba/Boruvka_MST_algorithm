@@ -19,4 +19,5 @@ set_property(TARGET mst PROPERTY CXX_STANDARD_REQUIRED ON)
 
 target_link_libraries(mst
   tbb
+  pthread
   )
