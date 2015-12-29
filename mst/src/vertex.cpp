@@ -1,7 +1,7 @@
 #include <iostream>
 #include "vertex.h"
 
-void Vertex::add(ListNode * node)
+void Vertex::add(ListNode * node) volatile
 {
     if (head == nullptr)
     {
@@ -34,9 +34,9 @@ void Vertex::add(ListNode * node)
 
 // find the root vetrix
 // without path compression
-Vertex * Vertex::croot() const
+volatile Vertex * Vertex::croot() const volatile
 {
-    Vertex * root = parent;
+    volatile Vertex * root = parent;
     while (root->parent != root)
     {
         root = root->parent;
@@ -46,17 +46,17 @@ Vertex * Vertex::croot() const
 
 // find the root vertix
 // and compress path in the tree if posiible
-Vertex * Vertex::root()
-{
-    Vertex * root = croot();
-    if (parent != root)
-    {
-        parent = root;
-    }
-    return root;
-}
+// volatile Vertex * Vertex::root() volatile
+// {
+//     volatile Vertex * root = croot();
+//     if (parent != root)
+//     {
+//         parent = root;
+//     }
+//     return root;
+// }
 
-void Vertex::print() const
+void Vertex::print() const volatile
 {
     std::cout << "v " << index << ": ";
     if (parent == this)

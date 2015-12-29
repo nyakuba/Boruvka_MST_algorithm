@@ -41,7 +41,7 @@ class Vertex
 {
 public:
     ListNode * head;  // head of the edge list
-    Vertex * parent;    // root of the vertex tree
+    volatile Vertex * parent;    // root of the vertex tree
     index_t index;
     Vertex()
         : head(nullptr), parent(this), index(0)
@@ -49,17 +49,17 @@ public:
         }
 
     // add a new ListNode with the edge in the sorted linked list
-    void add(ListNode * node);
+    void add(ListNode * node) volatile;
 
     // find the root vetrix
     // without path compression
-    Vertex * croot() const;
+    volatile Vertex * croot() const volatile;
 
     // find the root vertix
     // and compress path in the tree if posiible
-    Vertex * root();
+    // volatile Vertex * root() volatile;
 
-    void print() const;
+    void print() const volatile;
 };
 
 #endif /* VERTEX_H */

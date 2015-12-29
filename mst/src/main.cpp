@@ -46,6 +46,7 @@ int main(int argc, char *argv[])
     end = std::chrono::high_resolution_clock::now();
     std::cout << "Time: "
               << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()
+              << " microseconds"
               << std::endl;
 
     uint64_t tree_weight = 0;

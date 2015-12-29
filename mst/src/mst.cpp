@@ -4,7 +4,7 @@
 #include <tbb/parallel_for.h>
 #include "mst.h"
 
-// #define DEBUG
+//#define DEBUG
 
 #if defined(DEBUG)
 tbb::mutex io_mutex;
@@ -14,7 +14,7 @@ tbb::mutex io_mutex;
     std::cout << msg << std::endl; \
     io_mutex.unlock();
 
-inline void printComponents(const Vertex * pV, const index_t & NV)
+inline void printComponents(const volatile Vertex * pV, const index_t & NV)
 {
     io_mutex.lock();
     for (index_t i = 0; i < NV; ++i)
@@ -25,7 +25,7 @@ inline void printComponents(const Vertex * pV, const index_t & NV)
 }
 #else
 #define PRINT(msg)
-inline void printComponents(const Vertex * pV, const index_t & NV) { }
+inline void printComponents(const volatile Vertex * pV, const index_t & NV) { }
 #endif
 
 
@@ -44,7 +44,10 @@ inline void step(ListNode ** head)
 }
 
 // merge two components
-void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
+void merge(volatile Vertex * pV,
+           const index_t & NV,
+           volatile Vertex * root1,
+           volatile Vertex * root2)
 {
     // save link to the minimal edge
     ListNode * min_edge = root1->head;
@@ -56,7 +59,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     // delete first edges (component1, component2)
     if (head1 != nullptr)
     {
-        Vertex * r = pV[head1->end()].croot();
+        volatile Vertex * r = pV[head1->end()].croot();
         while (r == root2)
         {
             step(&head1);
@@ -67,7 +70,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
 
     if (head2 != nullptr)
     {
-        Vertex * r = pV[head2->end()].croot();
+        volatile Vertex * r = pV[head2->end()].croot();
         while (r == root1)
         {
             step(&head2);
@@ -106,7 +109,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     {
         if (head1->weight() < head2->weight())
         {
-            Vertex * r = pV[head1->end()].croot();
+            volatile Vertex * r = pV[head1->end()].croot();
             if (r != root2)
             {
                 move_head(&head1, &node);
@@ -118,7 +121,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
         }
         else  // head2 is smaller
         {
-            Vertex * r = pV[head2->end()].croot();
+            volatile Vertex * r = pV[head2->end()].croot();
             if (r != root1)
             {
                 move_head(&head2, &node);
@@ -133,7 +136,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     // remaining elements
     while (head1 != nullptr)
     {
-        Vertex * r = pV[head1->end()].croot();
+        volatile Vertex * r = pV[head1->end()].croot();
         if (r != root2)
         {
             move_head(&head1, &node);
@@ -145,7 +148,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     }
     while (head2 != nullptr)
     {
-        Vertex * r = pV[head2->end()].croot();
+        volatile Vertex * r = pV[head2->end()].croot();
         if (r != root1)
         {
             move_head(&head2, &node);
@@ -159,6 +162,15 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     {
         node->next = nullptr;
     } 
+
+    if (root1 != root1->croot())
+    {
+        std::cerr << "ROOT1!" << std::endl;
+    }
+    if (root2 != root2->croot())
+    {
+        std::cerr << "ROOT2!" << std::endl;
+    }
 
     // set merged list of edges
     root1->head = head;
@@ -180,7 +192,7 @@ public:
         { }
     void set_context(const index_t &nvertices,
                      const index_t &nedges,
-                     Vertex * pVertices,
+                     volatile Vertex * pVertices,
                      tbb::mutex * pEdgeMutex,
                      tbb::mutex * pVertexMutex)
         {
@@ -190,6 +202,38 @@ public:
             pEMutex = pEdgeMutex;
             pVMutex = pVertexMutex;
         }
+
+    // return true if aquired successfully
+    bool aquire(volatile Vertex ** root) const volatile
+        {
+            bool aquired = false;
+            volatile Vertex * v;
+            while (!aquired)
+            {
+                if (!pVMutex[*root - pV].try_lock())
+                {
+                    break;
+                }
+                else
+                {
+                    // check if root has changed
+                    v = *root;
+                    *root = v->croot();
+                    if (v == *root)
+                    {
+                        aquired = true;
+                    }
+                    else
+                    {
+                        // pechal'ka
+                        pVMutex[v - pV].unlock();
+                        // ... and try aquire one more time
+                    }
+                }
+            }
+            return aquired;
+        }
+    
     void operator()(const tbb::blocked_range<index_t> & r) const
         {
             PRINT("Started interval from " << r.begin() << " to " << r.end());
@@ -199,29 +243,29 @@ public:
             {
                 completed = true;  // assume mst was built
                 bool merge_flag = false;  // are we prepared for merge?
-                Vertex *v1, *v2, *root1, *root2;
-                index_t rindex1, rindex2;
+                volatile Vertex *v1, *v2, *root1, *root2;
                 pEMutex->lock();
                 // find and lock two component's roots for merge
                 for (index_t vertex_index = 0; vertex_index < NV; ++vertex_index)
                 {
                     v1 = pV + vertex_index;
                     root1 = v1->croot();
-                    rindex1 = root1 - pV;
-                    // try lock. if successfull, return true
-                    if (!pVMutex[rindex1].try_lock())
+                    // try aquire root1 mutex.
+                    // if successfull, return true
+                    if (!aquire(&root1))
                     {
                         completed = false;
                     }
                     else if (root1->head != nullptr)
                     {
+                        // there are edges
                         completed = false;
                         v2 = pV + root1->head->end();
                         root2 = v2->croot();
-                        rindex2 = root2 - pV;
-                        if (!pVMutex[rindex2].try_lock())
+                        // try aquire second mutex
+                        if (!aquire(&root2))
                         {
-                            pVMutex[rindex1].unlock();
+                            pVMutex[root1 - pV].unlock();
                         }
                         else
                         {
@@ -231,29 +275,31 @@ public:
                     }
                     else
                     {
-                        pVMutex[rindex1].unlock();
+                        // no edges in component
+                        // nothing to do
+                        pVMutex[root1 - pV].unlock();
                     }
                 }  // for each vertex in pV
                 pEMutex->unlock();
                 if (merge_flag)
                 {
                     merge(pV, NV, root1, root2);
-                    pVMutex[rindex1].unlock();
-                    pVMutex[rindex2].unlock();
+                    pVMutex[root1 - pV].unlock();
+                    pVMutex[root2 - pV].unlock();
                 }
             }  // while !completed
         } 
 private:
     static index_t NV;
     static index_t NE;
-    static Vertex * pV;
+    static volatile Vertex * pV;
     static tbb::mutex * pVMutex;
     static tbb::mutex * pEMutex;
 };
 
 index_t ApplyMerge::NV = 0;
 index_t ApplyMerge::NE = 0;
-Vertex * ApplyMerge::pV = nullptr;
+volatile Vertex * ApplyMerge::pV = nullptr;
 tbb::mutex * ApplyMerge::pVMutex = nullptr;
 tbb::mutex * ApplyMerge::pEMutex = nullptr;
 
@@ -269,7 +315,7 @@ void MST(
 {
     // initialization
     // create NV components
-    Vertex *pV = new Vertex[NV];
+    volatile Vertex *pV = new Vertex[NV];
     for (int32_t i = 0; i < NV; ++i)
     {
         pV[i].index = i;
