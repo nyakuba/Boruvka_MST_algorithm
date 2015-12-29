@@ -1,13 +1,33 @@
 #include <iostream>
+#include <tbb/mutex.h>
+#include <tbb/task_scheduler_init.h>
+#include <tbb/parallel_for.h>
 #include "mst.h"
+
+//#define DEBUG
+
+#if defined(DEBUG)
+tbb::mutex io_mutex;
+
+#define PRINT(msg) \
+    io_mutex.lock(); \
+    std::cout << msg << std::endl; \
+    io_mutex.unlock();
 
 inline void printComponents(const Vertex * pV, const index_t & NV)
 {
+    io_mutex.lock();
     for (index_t i = 0; i < NV; ++i)
     {
         pV[i].print();
     }
+    io_mutex.unlock();
 }
+#else
+#define PRINT(msg)
+inline void printComponents(const Vertex * pV, const index_t & NV) { }
+#endif
+
 
 inline void move_head(ListNode ** src, ListNode ** dst)
 {
@@ -36,23 +56,23 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     // delete first edges (component1, component2)
     if (head1 != nullptr)
     {
-        Vertex * r = pV[head1->end()].root();
+        Vertex * r = pV[head1->end()].croot();
         while (r == root2)
         {
             step(&head1);
             if (head1 == nullptr) break;
-            r = pV[head1->end()].root();
+            r = pV[head1->end()].croot();
         }
     }
 
     if (head2 != nullptr)
     {
-        Vertex * r = pV[head2->end()].root();
+        Vertex * r = pV[head2->end()].croot();
         while (r == root1)
         {
             step(&head2);
             if (head2 == nullptr) break;
-            r = pV[head2->end()].root();
+            r = pV[head2->end()].croot();
         }
     }
 
@@ -79,7 +99,6 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
         step(&head2);
     }
 
-
     // merge two lists while both of them contain elements
     // do not forget deletion
     ListNode *node = head, *tmp;
@@ -87,7 +106,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     {
         if (head1->weight() < head2->weight())
         {
-            Vertex * r = pV[head1->end()].root();
+            Vertex * r = pV[head1->end()].croot();
             if (r != root2)
             {
                 move_head(&head1, &node);
@@ -99,7 +118,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
         }
         else  // head2 is smaller
         {
-            Vertex * r = pV[head2->end()].root();
+            Vertex * r = pV[head2->end()].croot();
             if (r != root1)
             {
                 move_head(&head2, &node);
@@ -114,7 +133,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     // remaining elements
     while (head1 != nullptr)
     {
-        Vertex * r = pV[head1->end()].root();
+        Vertex * r = pV[head1->end()].croot();
         if (r != root2)
         {
             move_head(&head1, &node);
@@ -126,7 +145,7 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     }
     while (head2 != nullptr)
     {
-        Vertex * r = pV[head2->end()].root();
+        Vertex * r = pV[head2->end()].croot();
         if (r != root1)
         {
             move_head(&head2, &node);
@@ -150,8 +169,67 @@ void merge(Vertex * pV, const index_t & NV, Vertex * root1, Vertex * root2)
     root2->parent = root1;
 }
 
+class ApplyMerge
+{
+public:
+    ApplyMerge()
+        { }
+    ApplyMerge(const ApplyMerge & a)
+        { }
+    ~ApplyMerge()
+        { }
+    void set_context(const index_t &nvertices,
+                     const index_t &nedges,
+                     Vertex * pVertices,
+                     tbb::mutex * pEdgeMutex,
+                     tbb::mutex * pVertexMutex)
+        {
+            NV = nvertices;
+            NE = nedges;
+            pV = pVertices;
+            pEMutex = pEdgeMutex;
+            pVMutex = pVertexMutex;
+        }
+    void operator()(const tbb::blocked_range<index_t> & r) const
+        {
+            PRINT("Started interval" << r.begin() << " to " << r.end());
+            printComponents(pV, NV);
+            pEMutex->lock();
+            index_t start = r.begin();
+            Vertex * root1 = pV[start].croot();
+            if (root1->head != nullptr)
+            {
+                Vertex * end_vertex = pV + root1->head->end();
+                Vertex * root2 = end_vertex->croot();
+                pVMutex[root1 - pV].lock();
+                pVMutex[root2 - pV].lock();
+                pEMutex->unlock();
+                merge(pV, NV, root1, root2);
+                pVMutex[root1 - pV].unlock();
+                pVMutex[root2 - pV].unlock();
+            }
+            else
+            {
+                pEMutex->unlock();
+            }
+        } 
+private:
+    static index_t NV;
+    static index_t NE;
+    static Vertex * pV;
+    static tbb::mutex * pVMutex;
+    static tbb::mutex * pEMutex;
+};
+
+index_t ApplyMerge::NV = 0;
+index_t ApplyMerge::NE = 0;
+Vertex * ApplyMerge::pV = nullptr;
+tbb::mutex * ApplyMerge::pVMutex = nullptr;
+tbb::mutex * ApplyMerge::pEMutex = nullptr;
+
 void MST(
     // in
+    const uint32_t & NT,
     const index_t & NV,
     const index_t & NE,
     const Edge    * pE,
@@ -166,6 +244,12 @@ void MST(
     {
         pV[i].index = i;
     }
+    // create a mutex for aquiring edge
+    tbb::mutex aquireEdgeMutex;
+    // create an array of mutexes for each vertex
+    tbb::mutex * pVertexMutex = new tbb::mutex[NV];
+    // create NE * 2 list nodes for edges
+    // since our graph is unoriented
     ListNode *pN = new ListNode[NE * 2];
     for (int i = 0, j = 0; i < NE; ++i, j+=2)
     {
@@ -177,18 +261,15 @@ void MST(
         pV[pE[i].e].add(&pN[j+1]);
     }
     
-    for (index_t i = 0; i < NV; ++i)
-    {
-        std::cout << "Iteration number " << i << std::endl;
-        printComponents(pV, NV);
-        Vertex * root1 = pV[i].root(); // first component
-        if (root1->head != nullptr)
-        {
-            Vertex * end_vertex = pV + root1->head->end();
-            Vertex * root2 = end_vertex->root();
-            merge(pV, NV, root1, root2);
-        }
-    }
+    tbb::task_scheduler_init init(NT);
+    ApplyMerge fun;
+    fun.set_context(NV, NE, pV, &aquireEdgeMutex, pVertexMutex);
+    // number of iterations does not exceede NV-1, since
+    // we merge NV components
+    // for (index_t i = 0; i < NV; ++i)
+    // {
+    tbb::parallel_for(tbb::blocked_range<index_t>(0, NV, 1), fun);
+    // }
 
     index_t i = 0, j = 0;
     while (i < NV)

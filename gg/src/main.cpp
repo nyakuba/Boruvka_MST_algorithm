@@ -5,7 +5,33 @@
 #include <set>
 #include <utility>
 
-typedef std::pair<uint32_t, uint32_t> Edge;
+class Edge
+{
+public:
+    uint32_t start;
+    uint32_t end;
+    uint32_t weight;
+    Edge()
+        : start(0), end(0), weight(0)
+        {
+        }
+    Edge(const uint32_t & s, const uint32_t & e, const uint32_t & w)
+        : start(s), end(e), weight(w)
+        {
+        }
+    Edge(const Edge & e)
+        : start(e.start), end(e.end), weight(e.weight)
+        {
+        }
+    ~Edge() { }
+
+    Edge & operator=(const Edge & e)
+        {
+            start = e.start;
+            end = e.end;
+            weight = e.weight;
+        }
+};
 
 void printUsage();
 
@@ -28,6 +54,12 @@ int main(int argc, char *argv[])
         return -2;
     }
 
+    if (MAX_WEIGHT < NE)
+    {
+        std::cerr << "Maximum weinght is less than number of edges. Cannot make graph with different edge weights." << std::endl;
+        return -3;
+    }
+
     std::cout << NV << ' ' << NE << std::endl;
 
     // std::random_device rd;
@@ -35,28 +67,66 @@ int main(int argc, char *argv[])
     std::mt19937_64 gen;
     std::uniform_int_distribution<uint64_t> vdis(0, NV-1);
     std::uniform_int_distribution<uint64_t> wdis(0, MAX_WEIGHT);
-    std::set<Edge, bool(*)(const Edge &, const Edge &)> edges(
-        [](const Edge & a, const Edge & b) {
-            if (a.first != b.first)
-                return a.first < b.first;
-            else
-                return a.second < b.second;
-        }
-        );
-    int edges_count = 0;
-    while (edges_count < NE)
+    Edge *edges = new Edge[NE];
+
+    for (uint32_t edge_count = 0; edge_count < NE; ++edge_count)
     {
         uint32_t v1 = vdis(gen);
         uint32_t v2 = vdis(gen);
-        while (v2 == v1) v2 = vdis(gen);
-        if (v1 < v2) std::swap(v1, v2);
-        Edge edge(v1, v2);
-        if (edges.find(edge) == edges.end())
+        if (v1 == v2) v1 = (v1 + 1) % NV;
+        uint32_t w = wdis(gen);
+        bool found = true;
+        uint32_t probe = 0;
+        while (found)
         {
-            edges.insert(edge);
-            std::cout << v1 << ' ' << v2 << ' ' << wdis(gen) << std::endl;
-            ++edges_count;
+            found = false;
+            for (int i = 0; i < edge_count; ++i)
+            {
+                if ((edges[i].start == v1 && edges[i].end == v2) ||
+                    (edges[i].start == v2 && edges[i].end == v1))
+                {
+                    if (probe < NV)
+                    {
+                        if (v1 + 1 == v2)  
+                        {
+                            v1 = (v1 + 2) % NV;
+                        }
+                        else
+                        {
+                            v1 = (v1 + 1) % NV;
+                        }
+                    }
+                    else
+                    {
+                        if (v2 + 1 == v1)
+                        {
+                            v2 = (v2 + 2) % NV;
+                        }
+                        else
+                        {
+                            v2 = (v2 + 1) % NV;
+                        }
+                    }
+                    ++probe;
+                    found = true;
+                    break;
+                }
+                if (edges[i].weight == w)
+                {
+                    w = (w + 1) % MAX_WEIGHT;
+                    found = true;
+                    break;
+                }
+            }
         }
+        
+        if (v1 < v2) std::swap(v1, v2);
+        edges[edge_count] = Edge(v1, v2, w);
+    }
+
+    for (int i = 0; i < NE; ++i)
+    {
+        std::cout << edges[i].start << ' ' << edges[i].end << ' ' << edges[i].weight << std::endl;
     }
     
     return 0;
